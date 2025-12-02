@@ -220,20 +220,27 @@ fn print_reports(
   let #(rows, cols) = term_size()
 
   [
-    tree,
     [
-      left <> " " <> ansi.red(int.to_string(year)) <> " " <> right <> "\n",
-      calendar_view(today(), max_day, completed_days),
-      detail_view(max_day, completed_days),
+      tree,
+      [
+        left <> " " <> ansi.red(int.to_string(year)) <> " " <> right <> "\n",
+        calendar_view(today(), max_day, completed_days),
+      ]
+        |> string_width.stack_vertical(
+          align: string_width.Center,
+          gap: 1,
+          with: " ",
+        ),
     ]
-      |> string_width.stack_vertical(
-        align: string_width.Center,
-        gap: 1,
+      |> string_width.stack_horizontal(
+        place: string_width.Top,
+        gap: 5,
         with: " ",
-      ),
+      )
+      |> string_width.align(to: cols, align: string_width.Center, with: " "),
+    detail_view(max_day, completed_days),
   ]
-  |> string_width.stack_horizontal(place: string_width.Top, gap: 5, with: " ")
-  |> string_width.align(to: cols, align: string_width.Center, with: " ")
+  |> string_width.stack_vertical(align: string_width.Left, gap: 1, with: " ")
   |> vertical_center_align(rows)
   |> io.println
 }
@@ -317,8 +324,8 @@ fn pretty_report(report: Report) -> Result(String, Nil) {
     Ran(day:, outcome_a:, outcome_b:) ->
       case outcome_to_detail(outcome_a), outcome_to_detail(outcome_b) {
         Ok(detail_a), Ok(detail_b) -> Ok(day_report(day, detail_a, detail_b))
-        Ok(detail_a), Error(_) -> Ok(day_report(day, detail_a, "      "))
-        Error(_), Ok(detail_b) -> Ok(day_report(day, "      ", detail_b))
+        Ok(detail_a), Error(_) -> Ok(day_report(day, detail_a, "   "))
+        Error(_), Ok(detail_b) -> Ok(day_report(day, "   ", detail_b))
         Error(_), Error(_) -> Error(Nil)
       }
   }
