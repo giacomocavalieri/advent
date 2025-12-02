@@ -104,7 +104,7 @@ pub fn add_day(runner: Year, day: Day(_, _, _)) -> Year {
 ///
 pub fn add_padding_days(runner: Year, up_to days: Int) -> Year {
   let total_days = dict.size(runner.days)
-  let max_day = dict.keys(runner.days) |> list.fold(1, int.max)
+  let max_day = dict.keys(runner.days) |> list.fold(0, int.max)
   let missing_days = days - total_days
   case missing_days <= 0 {
     True -> runner
