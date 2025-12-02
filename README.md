@@ -47,3 +47,8 @@ pub fn main() -> Nil {
     --watch inputs\
     -- "gleam run"
   ```
+
+## WIP
+
+- [ ] Timing information
+- [ ] Add examples to the mix
