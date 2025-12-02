@@ -50,5 +50,4 @@ pub fn main() -> Nil {
 
 ## WIP
 
-- [ ] Timing information
 - [ ] Add examples to the mix

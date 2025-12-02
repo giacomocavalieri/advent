@@ -59,7 +59,12 @@ pub type Day(input, output_a, output_b) {
 ///   function.
 ///
 pub opaque type Year {
-  Runner(year: Int, days: Dict(Int, fn() -> Report))
+  Runner(year: Int, days: Dict(Int, fn() -> Report), time_mode: TimeMode)
+}
+
+type TimeMode {
+  ShowTimings
+  HideTimings
 }
 
 /// Creates a new year to collect the solutions for each day.
@@ -69,7 +74,14 @@ pub opaque type Year {
 ///   [`run`](#run) function.
 ///
 pub fn year(year: Int) -> Year {
-  Runner(year:, days: dict.new())
+  Runner(year:, days: dict.new(), time_mode: HideTimings)
+}
+
+/// When the year is run this will display timing informations for each day.
+/// The timings include the time it takes to parse the input!
+///
+pub fn show_timings(year: Year) -> Year {
+  Runner(..year, time_mode: ShowTimings)
 }
 
 /// Adds a new day to the given year.
@@ -149,7 +161,7 @@ pub fn run(year: Year) -> Nil {
   let missing_days = dict.keys(year.days) |> set.from_list
   let tree = tree.generate(10)
 
-  report_loop(year.year, tree, me, missing_days, dict.new())
+  report_loop(year.year, tree, me, missing_days, dict.new(), year.time_mode)
 }
 
 fn report_loop(
@@ -158,19 +170,20 @@ fn report_loop(
   me: Subject(Report),
   missing_days: Set(Int),
   completed_days: Dict(Int, Report),
+  time_mode: TimeMode,
 ) {
   case set.is_empty(missing_days) {
     True -> {
-      print_reports(year, tree, missing_days, completed_days)
+      print_reports(year, tree, missing_days, completed_days, time_mode)
       io.println("\n\n")
     }
 
     False -> {
-      print_reports(year, tree, missing_days, completed_days)
+      print_reports(year, tree, missing_days, completed_days, time_mode)
       let report = process.receive_forever(me)
       let missing_days = set.delete(missing_days, report.day)
       let completed_days = dict.insert(completed_days, report.day, report)
-      report_loop(year, tree, me, missing_days, completed_days)
+      report_loop(year, tree, me, missing_days, completed_days, time_mode)
     }
   }
 }
@@ -180,6 +193,7 @@ fn print_reports(
   tree: String,
   missing_days: Set(Int),
   completed_days: Dict(Int, Report),
+  time_mode: TimeMode,
 ) {
   let max_day =
     missing_days
@@ -238,7 +252,7 @@ fn print_reports(
         with: " ",
       )
       |> string_width.align(to: cols, align: string_width.Center, with: " "),
-    detail_view(max_day, completed_days),
+    detail_view(max_day, completed_days, time_mode),
   ]
   |> string_width.stack_vertical(align: string_width.Left, gap: 1, with: " ")
   |> vertical_center_align(rows)
@@ -294,7 +308,7 @@ fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
     Error(_) -> ansi.dim("  ")
     Ok(ParseFailed(day: _)) -> ansi.red("xx")
     Ok(NoFile(day: _, file: _)) -> ansi.red("  ")
-    Ok(Ran(day: _, outcome_a:, outcome_b:)) ->
+    Ok(Ran(day: _, outcome_a:, outcome_b:, microseconds_a: _, microseconds_b: _)) ->
       outcome_to_dot(outcome_a) <> outcome_to_dot(outcome_b)
   }
 }
@@ -310,19 +324,26 @@ fn outcome_to_dot(outcome: Outcome) -> String {
   }
 }
 
-fn detail_view(max_day: Int, completed_days: Dict(Int, Report)) -> String {
+fn detail_view(
+  max_day: Int,
+  completed_days: Dict(Int, Report),
+  time_mode: TimeMode,
+) -> String {
   list.range(1, max_day)
   |> list.filter_map(dict.get(completed_days, _))
-  |> list.filter_map(pretty_report)
+  |> list.filter_map(pretty_report(_, time_mode))
   |> string_width.stack_vertical(align: string_width.Left, gap: 0, with: " ")
 }
 
-fn pretty_report(report: Report) -> Result(String, Nil) {
+fn pretty_report(report: Report, time_mode: TimeMode) -> Result(String, Nil) {
   case report {
     NoFile(..) -> Error(Nil)
     ParseFailed(..) -> Error(Nil)
-    Ran(day:, outcome_a:, outcome_b:) ->
-      case outcome_to_detail(outcome_a), outcome_to_detail(outcome_b) {
+    Ran(day:, outcome_a:, outcome_b:, microseconds_a:, microseconds_b:) ->
+      case
+        outcome_to_detail(outcome_a, microseconds_a, time_mode),
+        outcome_to_detail(outcome_b, microseconds_b, time_mode)
+      {
         Ok(detail_a), Ok(detail_b) -> Ok(day_report(day, detail_a, detail_b))
         Ok(detail_a), Error(_) -> Ok(day_report(day, detail_a, "   "))
         Error(_), Ok(detail_b) -> Ok(day_report(day, "   ", detail_b))
@@ -336,27 +357,52 @@ fn day_report(day: Int, details_a: String, details_b: String) -> String {
   |> string_width.stack_horizontal(place: string_width.Top, gap: 2, with: " ")
 }
 
-fn outcome_to_detail(outcome: Outcome) -> Result(String, Nil) {
-  case outcome {
-    TimedOut -> Ok("timed out")
+fn outcome_to_detail(
+  outcome: Outcome,
+  microseconds: Int,
+  time_mode: TimeMode,
+) -> Result(String, Nil) {
+  case outcome, time_mode {
+    TimedOut, _ -> Ok("timed out")
 
-    Crashed("`panic` expression evaluated.")
-    | Crashed("Assertion failed.")
-    | Crashed("Pattern match failed, no pattern matched the value.") ->
-      Ok(ansi.red("panic"))
+    Crashed("`panic` expression evaluated."), _
+    | Crashed("Assertion failed."), _
+    | Crashed("Pattern match failed, no pattern matched the value."), _
+    -> Ok(ansi.red("panic"))
 
-    Crashed("todo")
+    Crashed("todo"), _
     | Todo(
         "`todo` expression evaluated. This code has not yet been implemented.",
-      ) -> Error(Nil)
+      ),
+      _
+    -> Error(Nil)
 
-    Todo(message:) -> Ok(ansi.dim("todo: " <> message))
-    Crashed(message:) -> Ok(ansi.red("panic: " <> message))
+    Todo(message:), _ -> Ok(ansi.dim("todo: " <> message))
+    Crashed(message:), _ -> Ok(ansi.red("panic: " <> message))
 
-    Bare(value:) -> Ok(ansi.yellow(value))
-    Success(value: _) -> Error(Nil)
-    Failure(got: _, expected: _) -> Error(Nil)
-    KnownFailure(got: _) -> Error(Nil)
+    Bare(value:), HideTimings -> Ok(ansi.yellow(value))
+    Bare(value:), ShowTimings ->
+      Ok(ansi.yellow(value) <> pretty_time(microseconds))
+
+    Success(value: _), HideTimings -> Error(Nil)
+    Success(value: _), ShowTimings -> Ok(pretty_time(microseconds))
+
+    Failure(got: _, expected: _), _ -> Error(Nil)
+    KnownFailure(got: _), _ -> Error(Nil)
+  }
+}
+
+fn pretty_time(microseconds: Int) -> String {
+  case microseconds > 1000 {
+    True ->
+      ansi.dim(
+        " "
+        <> int.to_string(microseconds / 1000)
+        <> "."
+        <> int.to_string(microseconds % 1000)
+        <> "ms",
+      )
+    False -> ansi.dim(" " <> int.to_string(microseconds) <> "μs")
   }
 }
 
@@ -365,7 +411,13 @@ fn pretty_day(day: Int) -> String {
 }
 
 type Report {
-  Ran(day: Int, outcome_a: Outcome, outcome_b: Outcome)
+  Ran(
+    day: Int,
+    outcome_a: Outcome,
+    microseconds_a: Int,
+    outcome_b: Outcome,
+    microseconds_b: Int,
+  )
   ParseFailed(day: Int)
   NoFile(day: Int, file: String)
 }
@@ -414,15 +466,24 @@ fn run_day(input: String, data: Day(input, output_a, output_b)) -> Report {
     wrong_answers_b:,
   ) = data
 
-  case exception.rescue(fn() { parse(input) }) {
+  case exception.rescue(fn() { timed(fn() { parse(input) }) }) {
     Error(_) -> ParseFailed(day:)
-    Ok(parsed) -> {
-      let outcome_a = run_part(part_a, parsed, expected_a, wrong_answers_a)
-      let outcome_b = run_part(part_b, parsed, expected_b, wrong_answers_b)
-      Ran(day:, outcome_a:, outcome_b:)
+    Ok(#(microseconds_parse, parsed)) -> {
+      let #(microseconds_a, outcome_a) =
+        timed(fn() { run_part(part_a, parsed, expected_a, wrong_answers_a) })
+      let microseconds_a = microseconds_a + microseconds_parse
+
+      let #(microseconds_b, outcome_b) =
+        timed(fn() { run_part(part_b, parsed, expected_b, wrong_answers_b) })
+      let microseconds_b = microseconds_b + microseconds_parse
+
+      Ran(day:, outcome_a:, outcome_b:, microseconds_a:, microseconds_b:)
     }
   }
 }
+
+@external(erlang, "timer", "tc")
+fn timed(function: fn() -> a) -> #(Int, a)
 
 fn get_input(year year: Int, day day: Int) -> Result(String, String) {
   let project_root = project.find_root()
