@@ -9,7 +9,7 @@
 To add this to your Gleam project add this to your `gleam.toml`'s dependencies:
 
 ```toml
-advent = { git = "git@github.com:giacomocavalieri/advent.git", ref = "main" }
+advent = { git = "https://github.com/giacomocavalieri/advent.git", ref = "main" }
 ```
 
 ## Usage
