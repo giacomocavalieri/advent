@@ -16,7 +16,20 @@ pub fn main() {
       wrong_answers_b: [],
     ),
   )
+  |> advent.add_day(
+    advent.Day(
+      day: 2,
+      parse: fn(_) { process.sleep(50) },
+      part_a: fn(_) { 1 },
+      expected_a: option.None,
+      wrong_answers_a: [],
+      part_b: fn(_) { process.sleep(1000) },
+      expected_b: option.Some(Nil),
+      wrong_answers_b: [],
+    ),
+  )
   |> advent.add_padding_days(12)
   |> advent.show_timings
+  |> advent.sequential
   |> advent.run
 }

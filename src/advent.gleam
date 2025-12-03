@@ -59,12 +59,22 @@ pub type Day(input, output_a, output_b) {
 ///   function.
 ///
 pub opaque type Year {
-  Runner(year: Int, days: Dict(Int, fn() -> Report), time_mode: TimeMode)
+  Runner(
+    year: Int,
+    days: Dict(Int, fn() -> Report),
+    time_mode: TimeMode,
+    run_mode: RunMode,
+  )
 }
 
 type TimeMode {
   ShowTimings
   HideTimings
+}
+
+type RunMode {
+  Sequential
+  Parallel
 }
 
 /// Creates a new year to collect the solutions for each day.
@@ -74,7 +84,7 @@ type TimeMode {
 ///   [`run`](#run) function.
 ///
 pub fn year(year: Int) -> Year {
-  Runner(year:, days: dict.new(), time_mode: HideTimings)
+  Runner(year:, days: dict.new(), time_mode: HideTimings, run_mode: Parallel)
 }
 
 /// When the year is run this will display timing informations for each day.
@@ -82,6 +92,13 @@ pub fn year(year: Int) -> Year {
 ///
 pub fn show_timings(year: Year) -> Year {
   Runner(..year, time_mode: ShowTimings)
+}
+
+/// Runs all the days one after another in sequence, rather than the default
+/// behaviour of running everything in parallel.
+///
+pub fn sequential(year: Year) -> Year {
+  Runner(..year, run_mode: Sequential)
 }
 
 /// Adds a new day to the given year.
@@ -154,14 +171,24 @@ pub fn run(year: Year) -> Nil {
   logging.set_level(logging.Emergency)
   let me = process.new_subject()
 
-  dict.each(year.days, fn(_day, run_day) {
-    process.spawn(fn() { process.send(me, run_day()) })
-  })
+  process.spawn(fn() { days_runner(me, year) })
 
   let missing_days = dict.keys(year.days) |> set.from_list
   let tree = tree.generate(10)
 
   report_loop(year.year, tree, me, missing_days, dict.new(), year.time_mode)
+}
+
+fn days_runner(reporter: Subject(Report), year: Year) -> Nil {
+  dict.each(year.days, fn(_day, run_day) {
+    case year.run_mode {
+      Sequential -> process.send(reporter, run_day())
+      Parallel -> {
+        let _ = process.spawn(fn() { process.send(reporter, run_day()) })
+        Nil
+      }
+    }
+  })
 }
 
 fn report_loop(
