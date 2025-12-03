@@ -82,6 +82,13 @@ fn timed_loop(
   }
 }
 
+/// This function determines if a given timing is an outlier using the method
+/// described by Boris lglewicz and David C. Hoaglin in
+/// "How to Detect and Handle Outliers"
+///
+/// In particular this method is described in Chapter 3 on page 11
+/// "Outlier Labelling" as a "Modified Z Score".
+///
 @internal
 pub fn is_outlier(time: Int, times: List(Int)) -> Bool {
   case modified_z_score(time, times) {
