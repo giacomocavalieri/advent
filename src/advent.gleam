@@ -201,10 +201,7 @@ fn report_loop(
   completed_days: Dict(Int, Report),
 ) {
   case set.is_empty(missing_days) {
-    True -> {
-      print_reports(year, tree, missing_days, completed_days)
-      io.println("\n\n")
-    }
+    True -> print_reports(year, tree, missing_days, completed_days)
 
     False -> {
       print_reports(year, tree, missing_days, completed_days)
