@@ -1,4 +1,7 @@
 import advent/internal/project
+import advent/internal/timer.{
+  type TimeMode, type Timing, DoTimings, NoTimings, Timing,
+}
 import advent/internal/tree
 import exception
 import filepath
@@ -67,11 +70,6 @@ pub opaque type Year {
   )
 }
 
-type TimeMode {
-  ShowTimings
-  HideTimings
-}
-
 type RunMode {
   Sequential
   Parallel
@@ -84,14 +82,17 @@ type RunMode {
 ///   [`run`](#run) function.
 ///
 pub fn year(year: Int) -> Year {
-  Runner(year:, days: dict.new(), time_mode: HideTimings, run_mode: Parallel)
+  Runner(year:, days: dict.new(), time_mode: NoTimings, run_mode: Parallel)
 }
 
-/// When the year is run this will display timing informations for each day.
-/// The timings include the time it takes to parse the input!
+/// All the days added after this is applied to the runner will also include
+/// timing informations in their output.
 ///
-pub fn show_timings(year: Year) -> Year {
-  Runner(..year, time_mode: ShowTimings)
+/// The timings take the average of non-outlier measurements and include the
+/// time it takes to run the parsing function as well.
+///
+pub fn timed(year: Year) -> Year {
+  Runner(..year, time_mode: DoTimings)
 }
 
 /// Runs all the days one after another in sequence, rather than the default
@@ -106,11 +107,12 @@ pub fn sequential(year: Year) -> Year {
 ///
 pub fn add_day(runner: Year, day: Day(_, _, _)) -> Year {
   let year = runner.year
+  let time_mode = runner.time_mode
   let days =
     dict.insert(runner.days, day.day, fn() {
       case get_input(year, day.day) {
         Error(file) -> NoFile(day: day.day, file:)
-        Ok(input) -> run_day(input, day)
+        Ok(input) -> run_day(input, time_mode, day)
       }
     })
 
@@ -176,7 +178,7 @@ pub fn run(year: Year) -> Nil {
   let missing_days = dict.keys(year.days) |> set.from_list
   let tree = tree.generate(10)
 
-  report_loop(year.year, tree, me, missing_days, dict.new(), year.time_mode)
+  report_loop(year.year, tree, me, missing_days, dict.new())
 }
 
 fn days_runner(reporter: Subject(Report), year: Year) -> Nil {
@@ -197,20 +199,19 @@ fn report_loop(
   me: Subject(Report),
   missing_days: Set(Int),
   completed_days: Dict(Int, Report),
-  time_mode: TimeMode,
 ) {
   case set.is_empty(missing_days) {
     True -> {
-      print_reports(year, tree, missing_days, completed_days, time_mode)
+      print_reports(year, tree, missing_days, completed_days)
       io.println("\n\n")
     }
 
     False -> {
-      print_reports(year, tree, missing_days, completed_days, time_mode)
+      print_reports(year, tree, missing_days, completed_days)
       let report = process.receive_forever(me)
       let missing_days = set.delete(missing_days, report.day)
       let completed_days = dict.insert(completed_days, report.day, report)
-      report_loop(year, tree, me, missing_days, completed_days, time_mode)
+      report_loop(year, tree, me, missing_days, completed_days)
     }
   }
 }
@@ -220,7 +221,6 @@ fn print_reports(
   tree: String,
   missing_days: Set(Int),
   completed_days: Dict(Int, Report),
-  time_mode: TimeMode,
 ) {
   let max_day =
     missing_days
@@ -279,7 +279,7 @@ fn print_reports(
         with: " ",
       )
       |> string_width.align(to: cols, align: string_width.Center, with: " "),
-    detail_view(max_day, completed_days, time_mode),
+    detail_view(max_day, completed_days),
   ]
   |> string_width.stack_vertical(align: string_width.Left, gap: 1, with: " ")
   |> vertical_center_align(rows)
@@ -335,8 +335,8 @@ fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
     Error(_) -> ansi.dim("  ")
     Ok(ParseFailed(day: _)) -> ansi.red("xx")
     Ok(NoFile(day: _, file: _)) -> ansi.red("  ")
-    Ok(Ran(day: _, outcome_a:, outcome_b:, microseconds_a: _, microseconds_b: _)) ->
-      outcome_to_dot(outcome_a) <> outcome_to_dot(outcome_b)
+    Ok(Ran(day: _, outcome_a:, outcome_b:)) ->
+      outcome_to_dot(outcome_a.0) <> outcome_to_dot(outcome_b.0)
   }
 }
 
@@ -351,25 +351,25 @@ fn outcome_to_dot(outcome: Outcome) -> String {
   }
 }
 
-fn detail_view(
-  max_day: Int,
-  completed_days: Dict(Int, Report),
-  time_mode: TimeMode,
-) -> String {
+fn detail_view(max_day: Int, completed_days: Dict(Int, Report)) -> String {
   list.range(1, max_day)
   |> list.filter_map(dict.get(completed_days, _))
-  |> list.filter_map(pretty_report(_, time_mode))
+  |> list.filter_map(pretty_report)
   |> string_width.stack_vertical(align: string_width.Left, gap: 0, with: " ")
 }
 
-fn pretty_report(report: Report, time_mode: TimeMode) -> Result(String, Nil) {
+fn pretty_report(report: Report) -> Result(String, Nil) {
   case report {
     NoFile(..) -> Error(Nil)
     ParseFailed(..) -> Error(Nil)
-    Ran(day:, outcome_a:, outcome_b:, microseconds_a:, microseconds_b:) ->
+    Ran(
+      day:,
+      outcome_a: #(result_a, timing_a),
+      outcome_b: #(result_b, timing_b),
+    ) ->
       case
-        outcome_to_detail(outcome_a, microseconds_a, time_mode),
-        outcome_to_detail(outcome_b, microseconds_b, time_mode)
+        outcome_to_detail(result_a, timing_a),
+        outcome_to_detail(result_b, timing_b)
       {
         Ok(detail_a), Ok(detail_b) -> Ok(day_report(day, detail_a, detail_b))
         Ok(detail_a), Error(_) -> Ok(day_report(day, detail_a, "   "))
@@ -386,10 +386,9 @@ fn day_report(day: Int, details_a: String, details_b: String) -> String {
 
 fn outcome_to_detail(
   outcome: Outcome,
-  microseconds: Int,
-  time_mode: TimeMode,
+  timing: Option(Timing),
 ) -> Result(String, Nil) {
-  case outcome, time_mode {
+  case outcome, timing {
     TimedOut, _ -> Ok("timed out")
 
     Crashed("`panic` expression evaluated."), _
@@ -407,29 +406,52 @@ fn outcome_to_detail(
     Todo(message:), _ -> Ok(ansi.dim("todo: " <> message))
     Crashed(message:), _ -> Ok(ansi.red("panic: " <> message))
 
-    Bare(value:), HideTimings -> Ok(ansi.yellow(value))
-    Bare(value:), ShowTimings ->
-      Ok(ansi.yellow(value) <> pretty_time(microseconds))
+    Bare(value:), None -> Ok(ansi.yellow(value))
+    Bare(value:), Some(timing) ->
+      Ok(ansi.yellow(value) <> " " <> ansi.dim(pretty_elapsed_time(timing)))
 
-    Success(value: _), HideTimings -> Error(Nil)
-    Success(value: _), ShowTimings -> Ok(pretty_time(microseconds))
+    Success(value: _), None -> Error(Nil)
+    Success(value: _), Some(timing) -> Ok(ansi.dim(pretty_elapsed_time(timing)))
 
     Failure(got: _, expected: _), _ -> Error(Nil)
     KnownFailure(got: _), _ -> Error(Nil)
   }
 }
 
-fn pretty_time(microseconds: Int) -> String {
-  case microseconds > 1000 {
-    True ->
-      ansi.dim(
-        " "
-        <> int.to_string(microseconds / 1000)
-        <> "."
-        <> int.to_string(microseconds % 1000)
-        <> "ms",
-      )
-    False -> ansi.dim(" " <> int.to_string(microseconds) <> "μs")
+fn pretty_elapsed_time(outcome: Timing) -> String {
+  let Timing(elapsed_us:, standard_deviation_us:) = outcome
+
+  let #(units, decimals, deviation_units, deviation_decimals, unit) = case
+    elapsed_us >= 100
+  {
+    False -> #(elapsed_us, 0, standard_deviation_us, 0, "μs")
+    True -> #(
+      elapsed_us / 1000,
+      elapsed_us % 1000,
+      standard_deviation_us / 1000,
+      standard_deviation_us % 1000,
+      "ms",
+    )
+  }
+
+  let deviation = case deviation_units, deviation_decimals {
+    0, 0 -> ""
+    _, 0 -> " ±" <> to_subscript(deviation_units)
+    _, _ ->
+      " ±"
+      <> to_subscript(deviation_units)
+      <> "."
+      <> to_subscript(deviation_decimals)
+  }
+
+  case decimals {
+    0 -> int.to_string(units) <> unit <> deviation
+    _ ->
+      int.to_string(units)
+      <> "."
+      <> int.to_string(decimals)
+      <> unit
+      <> deviation
   }
 }
 
@@ -437,13 +459,44 @@ fn pretty_day(day: Int) -> String {
   int.to_string(day) |> string.pad_start(2, "0")
 }
 
+fn to_subscript(int: Int) -> String {
+  digits(int)
+  |> list.map(digit_to_subscript)
+  |> string.concat
+}
+
+fn digit_to_subscript(int: Int) -> String {
+  case int {
+    0 -> "₀"
+    1 -> "₁"
+    2 -> "₂"
+    3 -> "₃"
+    4 -> "₄"
+    5 -> "₅"
+    6 -> "₆"
+    7 -> "₇"
+    8 -> "₈"
+    9 -> "₉"
+    _ -> ""
+  }
+}
+
+fn digits(int: Int) -> List(Int) {
+  digits_loop(int, [])
+}
+
+fn digits_loop(int: Int, digits: List(Int)) -> List(Int) {
+  case int <= 9 {
+    True -> [int, ..digits]
+    False -> digits_loop(int / 10, [int % 10, ..digits])
+  }
+}
+
 type Report {
   Ran(
     day: Int,
-    outcome_a: Outcome,
-    microseconds_a: Int,
-    outcome_b: Outcome,
-    microseconds_b: Int,
+    outcome_a: #(Outcome, Option(Timing)),
+    outcome_b: #(Outcome, Option(Timing)),
   )
   ParseFailed(day: Int)
   NoFile(day: Int, file: String)
@@ -481,7 +534,11 @@ type Outcome {
   KnownFailure(got: String)
 }
 
-fn run_day(input: String, data: Day(input, output_a, output_b)) -> Report {
+fn run_day(
+  input: String,
+  time_mode: TimeMode,
+  data: Day(input, output_a, output_b),
+) -> Report {
   let Day(
     day:,
     parse:,
@@ -493,24 +550,38 @@ fn run_day(input: String, data: Day(input, output_a, output_b)) -> Report {
     wrong_answers_b:,
   ) = data
 
-  case exception.rescue(fn() { timed(fn() { parse(input) }) }) {
+  let parsed =
+    exception.rescue(fn() { timer.timed(time_mode, fn() { parse(input) }) })
+
+  case parsed {
     Error(_) -> ParseFailed(day:)
-    Ok(#(microseconds_parse, parsed)) -> {
-      let #(microseconds_a, outcome_a) =
-        timed(fn() { run_part(part_a, parsed, expected_a, wrong_answers_a) })
-      let microseconds_a = microseconds_a + microseconds_parse
+    Ok(#(parsed, parse_timing)) -> {
+      let #(result_a, timing_a) =
+        timer.timed(time_mode, fn() {
+          run_part(part_a, parsed, expected_a, wrong_answers_a)
+        })
 
-      let #(microseconds_b, outcome_b) =
-        timed(fn() { run_part(part_b, parsed, expected_b, wrong_answers_b) })
-      let microseconds_b = microseconds_b + microseconds_parse
+      let #(result_b, timing_b) =
+        timer.timed(time_mode, fn() {
+          run_part(part_b, parsed, expected_b, wrong_answers_b)
+        })
 
-      Ran(day:, outcome_a:, outcome_b:, microseconds_a:, microseconds_b:)
+      Ran(
+        day:,
+        outcome_a: #(result_a, {
+          use timing_a <- option.then(timing_a)
+          use parse_timing <- option.map(parse_timing)
+          timer.add(timing_a, parse_timing)
+        }),
+        outcome_b: #(result_b, {
+          use timing_b <- option.then(timing_b)
+          use parse_timing <- option.map(parse_timing)
+          timer.add(timing_b, parse_timing)
+        }),
+      )
     }
   }
 }
-
-@external(erlang, "timer", "tc")
-fn timed(function: fn() -> a) -> #(Int, a)
 
 fn get_input(year year: Int, day day: Int) -> Result(String, String) {
   let project_root = project.find_root()

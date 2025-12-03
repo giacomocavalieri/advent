@@ -21,6 +21,7 @@ import advent
 
 pub fn main() -> Nil {
   advent.year(2025)
+  |> advent.timed
   |> advent.add_day(todo as "your solution to day 01")
   |> advent.add_day(todo as "your solution to day 02")
   |> advent.add_day(todo as "...")
