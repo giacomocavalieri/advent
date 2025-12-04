@@ -137,3 +137,35 @@ pub fn sample_median(list: List(Float)) -> Result(Float, Nil) {
 
 @external(erlang, "timer", "tc")
 fn timer_tc(function: fn() -> a) -> #(Int, a)
+
+// NICE FORMATTING OF TIMES ----------------------------------------------------
+
+pub type DisplayUnit {
+  Ms
+  Us
+}
+
+pub type DisplayTime {
+  DisplayTime(unit: DisplayUnit, units: Int, decimals: Int)
+}
+
+pub fn from_us(us: Int) -> DisplayTime {
+  case us >= 100 {
+    True -> from_us_with_unit(us, Ms)
+    False -> from_us_with_unit(us, Us)
+  }
+}
+
+pub fn from_us_with_unit(us: Int, unit: DisplayUnit) {
+  case unit {
+    Ms -> DisplayTime(unit: Ms, units: us / 1000, decimals: us % 1000)
+    Us -> DisplayTime(unit: Us, units: us, decimals: us)
+  }
+}
+
+pub fn unit_to_string(unit: DisplayUnit) {
+  case unit {
+    Ms -> "ms"
+    Us -> "μs"
+  }
+}

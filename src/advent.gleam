@@ -355,10 +355,14 @@ fn details_table_view(
   max_day: Int,
   completed_days: Dict(Int, Report),
 ) -> Result(String, Nil) {
-  let rows =
+  let completed_days =
     list.range(1, max_day)
     |> list.filter_map(dict.get(completed_days, _))
-    |> list.filter_map(pretty_report_columns)
+
+  let max_digits = max_digits(in: completed_days)
+  let rows =
+    completed_days
+    |> list.filter_map(pretty_report_columns(_, max_digits))
 
   case rows {
     [] -> Error(Nil)
@@ -369,25 +373,62 @@ fn details_table_view(
         |> list.fold(over: rows, with: tobble.add_row)
         |> tobble.build
 
-      Ok(
-        tobble.render_with_options(table, [
-          table_render_opts.no_horizontal_rules(),
-          table_render_opts.line_type_blank(),
-        ]),
-      )
+      tobble.render_with_options(table, [
+        table_render_opts.no_horizontal_rules(),
+        table_render_opts.line_type_blank(),
+      ])
+      |> string.replace("•", with: " ")
+      |> Ok
     }
   }
 }
 
-fn pretty_report_columns(report: Report) -> Result(List(String), Nil) {
+fn max_digits(in reports: List(Report)) -> Option(#(Int, Int)) {
+  let #(digits_units, digits_decimals) =
+    list.flat_map(reports, fn(report) {
+      case report {
+        NoFile(..) | ParseFailed(..) -> []
+        Ran(outcome_a: #(_, time_a), outcome_b: #(_, time_b), day: _) ->
+          case time_a, time_b {
+            Some(time_a), Some(time_b) -> [time_a, time_b]
+            None, Some(time_b) -> [time_b]
+            Some(time_a), None -> [time_a]
+            None, None -> []
+          }
+      }
+    })
+    |> list.map(fn(time) {
+      let elapsed = timer.from_us(time.elapsed_us)
+      #(count_digits(elapsed.units), count_digits(elapsed.decimals))
+    })
+    |> list.unzip
+
+  option.from_result({
+    use units <- result.try(list.max(digits_units, int.compare))
+    use decimals <- result.try(list.max(digits_decimals, int.compare))
+    Ok(#(units, decimals))
+  })
+}
+
+fn count_digits(number: Int) {
+  case number <= 9 {
+    True -> 1
+    False -> 1 + count_digits(number / 10)
+  }
+}
+
+fn pretty_report_columns(
+  report: Report,
+  max_digits: Option(#(Int, Int)),
+) -> Result(List(String), Nil) {
   let pretty_day = pretty_day(report.day)
   case report {
     NoFile(..) -> Error(Nil)
     ParseFailed(..) -> Ok([pretty_day, ansi.red("parsing failed"), ""])
     Ran(outcome_a: #(result_a, timing_a), outcome_b: #(result_b, timing_b), ..) ->
       case
-        outcome_to_detail(result_a, timing_a),
-        outcome_to_detail(result_b, timing_b)
+        outcome_to_detail(result_a, timing_a, max_digits),
+        outcome_to_detail(result_b, timing_b, max_digits)
       {
         Ok(detail_a), Ok(detail_b) -> Ok([pretty_day, detail_a, detail_b])
         Ok(detail_a), Error(_) -> Ok([pretty_day, detail_a, ""])
@@ -400,6 +441,7 @@ fn pretty_report_columns(report: Report) -> Result(List(String), Nil) {
 fn outcome_to_detail(
   outcome: Outcome,
   timing: Option(Timing),
+  max_digits: Option(#(Int, Int)),
 ) -> Result(String, Nil) {
   case outcome, timing {
     TimedOut, _ -> Ok(ansi.red("timed out"))
@@ -421,51 +463,52 @@ fn outcome_to_detail(
 
     Bare(value:), None -> Ok(ansi.yellow(value))
     Bare(value:), Some(timing) ->
-      Ok(ansi.yellow(value) <> " " <> ansi.dim(pretty_elapsed_time(timing)))
+      Ok(
+        ansi.yellow(value)
+        <> " "
+        <> ansi.dim(pretty_elapsed_time(timing, max_digits)),
+      )
 
     Success(value: _), None -> Error(Nil)
-    Success(value: _), Some(timing) -> Ok(ansi.dim(pretty_elapsed_time(timing)))
+    Success(value: _), Some(timing) ->
+      Ok(ansi.dim(pretty_elapsed_time(timing, max_digits)))
 
     Failure(got: _, expected: _), _ -> Error(Nil)
     KnownFailure(got: _), _ -> Error(Nil)
   }
 }
 
-fn pretty_elapsed_time(outcome: Timing) -> String {
+fn pretty_elapsed_time(
+  outcome: Timing,
+  max_digits: Option(#(Int, Int)),
+) -> String {
   let Timing(elapsed_us:, standard_deviation_us:) = outcome
+  let elapsed = timer.from_us(elapsed_us)
+  let deviation = timer.from_us_with_unit(standard_deviation_us, elapsed.unit)
 
-  let #(units, decimals, deviation_units, deviation_decimals, unit) = case
-    elapsed_us >= 100
-  {
-    False -> #(elapsed_us, 0, standard_deviation_us, 0, "μs")
-    True -> #(
-      elapsed_us / 1000,
-      elapsed_us % 1000,
-      standard_deviation_us / 1000,
-      standard_deviation_us % 1000,
-      "ms",
-    )
-  }
-
-  let deviation = case deviation_units, deviation_decimals {
+  let deviation = case deviation.units, deviation.decimals {
     0, 0 -> ""
-    _, 0 -> " ±" <> to_subscript(deviation_units)
-    _, _ ->
-      " ±"
-      <> to_subscript(deviation_units)
-      <> "."
-      <> to_subscript(deviation_decimals)
+    units, 0 -> " ±" <> to_subscript(units)
+    units, decimals ->
+      " ±" <> to_subscript(units) <> "." <> to_subscript(decimals)
   }
 
-  case decimals {
-    0 -> int.to_string(units) <> unit <> deviation
-    _ ->
-      int.to_string(units)
-      <> "."
-      <> int.to_string(decimals)
-      <> unit
-      <> deviation
-  }
+  let #(max_units_digits, max_decimals_digits) =
+    option.unwrap(max_digits, #(2, 1))
+
+  string.pad_start(
+    int.to_string(elapsed.units),
+    to: max_units_digits,
+    with: "•",
+  )
+  <> "."
+  <> string.pad_end(
+    int.to_string(elapsed.decimals),
+    to: max_decimals_digits,
+    with: "0",
+  )
+  <> timer.unit_to_string(elapsed.unit)
+  <> deviation
 }
 
 fn pretty_day(day: Int) -> String {
