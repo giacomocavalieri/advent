@@ -20,7 +20,9 @@ import gleam/time/timestamp
 import gleam_community/ansi
 import logging
 import simplifile
-import string_width
+import string_width.{Center, Left, Top}
+import tobble
+import tobble/table_render_opts
 
 /// An Advent of Code day.
 ///
@@ -257,28 +259,29 @@ fn print_reports(
 
   let #(rows, cols) = term_size()
 
-  [
+  let ribbon_and_calendar =
+    [
+      left <> " " <> ansi.red(int.to_string(year)) <> " " <> right <> "\n",
+      calendar_view(today(), max_day, completed_days),
+    ]
+    |> string_width.stack_vertical(align: Center, gap: 1, with: " ")
+
+  let tree_and_calendar =
     [
       tree,
-      [
-        left <> " " <> ansi.red(int.to_string(year)) <> " " <> right <> "\n",
-        calendar_view(today(), max_day, completed_days),
-      ]
-        |> string_width.stack_vertical(
-          align: string_width.Center,
-          gap: 1,
-          with: " ",
-        ),
+      ribbon_and_calendar,
     ]
-      |> string_width.stack_horizontal(
-        place: string_width.Top,
-        gap: 5,
-        with: " ",
-      )
-      |> string_width.align(to: cols, align: string_width.Center, with: " "),
-    detail_view(max_day, completed_days),
-  ]
-  |> string_width.stack_vertical(align: string_width.Left, gap: 1, with: " ")
+    |> string_width.stack_horizontal(place: Top, gap: 5, with: " ")
+    |> string_width.align(to: cols, align: Center, with: " ")
+
+  case details_table_view(max_day, completed_days) {
+    Error(_) -> [tree_and_calendar]
+    Ok(details_table) -> [
+      tree_and_calendar,
+      details_table,
+    ]
+  }
+  |> string_width.stack_vertical(align: Left, gap: 1, with: " ")
   |> vertical_center_align(rows)
   |> io.println
 }
@@ -348,37 +351,50 @@ fn outcome_to_dot(outcome: Outcome) -> String {
   }
 }
 
-fn detail_view(max_day: Int, completed_days: Dict(Int, Report)) -> String {
-  list.range(1, max_day)
-  |> list.filter_map(dict.get(completed_days, _))
-  |> list.filter_map(pretty_report)
-  |> string_width.stack_vertical(align: string_width.Left, gap: 0, with: " ")
+fn details_table_view(
+  max_day: Int,
+  completed_days: Dict(Int, Report),
+) -> Result(String, Nil) {
+  let rows =
+    list.range(1, max_day)
+    |> list.filter_map(dict.get(completed_days, _))
+    |> list.filter_map(pretty_report_columns)
+
+  case rows {
+    [] -> Error(Nil)
+    _ -> {
+      let assert Ok(table) =
+        tobble.builder()
+        |> tobble.add_row(["day", "part 1", "part 2"])
+        |> list.fold(over: rows, with: tobble.add_row)
+        |> tobble.build
+
+      Ok(
+        tobble.render_with_options(table, [
+          table_render_opts.no_horizontal_rules(),
+          table_render_opts.line_type_blank(),
+        ]),
+      )
+    }
+  }
 }
 
-fn pretty_report(report: Report) -> Result(String, Nil) {
+fn pretty_report_columns(report: Report) -> Result(List(String), Nil) {
+  let pretty_day = pretty_day(report.day)
   case report {
     NoFile(..) -> Error(Nil)
-    ParseFailed(..) -> Error(Nil)
-    Ran(
-      day:,
-      outcome_a: #(result_a, timing_a),
-      outcome_b: #(result_b, timing_b),
-    ) ->
+    ParseFailed(..) -> Ok([pretty_day, ansi.red("parsing failed"), ""])
+    Ran(outcome_a: #(result_a, timing_a), outcome_b: #(result_b, timing_b), ..) ->
       case
         outcome_to_detail(result_a, timing_a),
         outcome_to_detail(result_b, timing_b)
       {
-        Ok(detail_a), Ok(detail_b) -> Ok(day_report(day, detail_a, detail_b))
-        Ok(detail_a), Error(_) -> Ok(day_report(day, detail_a, "   "))
-        Error(_), Ok(detail_b) -> Ok(day_report(day, "   ", detail_b))
+        Ok(detail_a), Ok(detail_b) -> Ok([pretty_day, detail_a, detail_b])
+        Ok(detail_a), Error(_) -> Ok([pretty_day, detail_a, ""])
+        Error(_), Ok(detail_b) -> Ok([pretty_day, "", detail_b])
         Error(_), Error(_) -> Error(Nil)
       }
   }
-}
-
-fn day_report(day: Int, details_a: String, details_b: String) -> String {
-  [ansi.dim(pretty_day(day)), details_a, details_b]
-  |> string_width.stack_horizontal(place: string_width.Top, gap: 2, with: " ")
 }
 
 fn outcome_to_detail(
@@ -386,7 +402,7 @@ fn outcome_to_detail(
   timing: Option(Timing),
 ) -> Result(String, Nil) {
   case outcome, timing {
-    TimedOut, _ -> Ok("timed out")
+    TimedOut, _ -> Ok(ansi.red("timed out"))
 
     Crashed("`panic` expression evaluated."), _
     | Crashed("Assertion failed."), _

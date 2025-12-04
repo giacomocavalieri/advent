@@ -17,5 +17,6 @@ pub fn main() {
       wrong_answers_b: [],
     ),
   )
+  |> advent.add_padding_days(up_to: 12)
   |> advent.run
 }
