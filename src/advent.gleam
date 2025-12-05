@@ -166,7 +166,7 @@ pub fn add_padding_days(year: Year, up_to days: Int) -> Year {
 /// All the days run in parallel and new outcomes will be displayed as soon as
 /// they are produced.
 ///
-/// > 🎄 The output of each day is expected to be located in a file at the
+/// > 🎄 The input of each day is expected to be located in a file at the
 /// > given path, relative to the root of your Gleam project:
 /// > `inputs/<YEAR>/<DAY>.txt`
 /// >
