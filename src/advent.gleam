@@ -3,7 +3,7 @@ import advent/internal/timer.{
   type TimeMode, type Timing, DoTimings, NoTimings, Timing,
 }
 import advent/internal/tree
-import exception
+import exception.{Errored, Exited, Thrown}
 import filepath
 import gleam/dict.{type Dict}
 import gleam/dynamic
@@ -333,7 +333,7 @@ fn calendar_view(today: Int, max_day: Int, completed_days: Dict(Int, Report)) {
 fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
   case dict.get(completed_days, day) {
     Error(_) -> ansi.dim("  ")
-    Ok(ParseFailed(day: _)) -> ansi.red("xx")
+    Ok(ParseFailed(day: _, message: _)) -> ansi.red("xx")
     Ok(NoFile(day: _, file: _)) -> ansi.red("  ")
     Ok(Ran(day: _, outcome_a:, outcome_b:)) ->
       outcome_to_dot(outcome_a.0) <> outcome_to_dot(outcome_b.0)
@@ -424,7 +424,15 @@ fn pretty_report_columns(
   let pretty_day = pretty_day(report.day)
   case report {
     NoFile(..) -> Error(Nil)
-    ParseFailed(..) -> Ok([pretty_day, ansi.red("parsing failed"), ""])
+    ParseFailed(message:, ..)
+      if message == panic_default_message
+      || message == assert_default_message
+      || message == let_assert_default_message
+      || message == todo_default_message
+      || message == ""
+    -> Ok([pretty_day, ansi.red("parse"), ""])
+    ParseFailed(message:, ..) ->
+      Ok([pretty_day, ansi.red("parse: " <> message), ""])
     Ran(outcome_a: #(result_a, timing_a), outcome_b: #(result_b, timing_b), ..) ->
       case
         outcome_to_detail(result_a, timing_a, max_digits),
@@ -438,6 +446,14 @@ fn pretty_report_columns(
   }
 }
 
+const panic_default_message = "`panic` expression evaluated."
+
+const assert_default_message = "Assertion failed."
+
+const let_assert_default_message = "Pattern match failed, no pattern matched the value."
+
+const todo_default_message = "`todo` expression evaluated. This code has not yet been implemented."
+
 fn outcome_to_detail(
   outcome: Outcome,
   timing: Option(Timing),
@@ -446,19 +462,17 @@ fn outcome_to_detail(
   case outcome, timing {
     TimedOut, _ -> Ok(ansi.red("timed out"))
 
-    Crashed("`panic` expression evaluated."), _
-    | Crashed("Assertion failed."), _
-    | Crashed("Pattern match failed, no pattern matched the value."), _
-    -> Ok(ansi.red("panic"))
-
-    Crashed("todo"), _
-    | Todo(
-        "`todo` expression evaluated. This code has not yet been implemented.",
-      ),
-      _
-    -> Error(Nil)
-
+    Todo(message), _ if message == todo_default_message -> Error(Nil)
+    Todo(message: ""), _ -> Ok(ansi.dim("todo"))
     Todo(message:), _ -> Ok(ansi.dim("todo: " <> message))
+
+    Crashed(message), _
+      if message == panic_default_message
+      || message == assert_default_message
+      || message == let_assert_default_message
+      || message == ""
+    -> Ok(ansi.red("panic"))
+    Crashed("todo"), _ -> Error(Nil)
     Crashed(message:), _ -> Ok(ansi.red("panic: " <> message))
 
     Bare(value:), None -> Ok(ansi.yellow(value))
@@ -554,7 +568,7 @@ type Report {
     outcome_a: #(Outcome, Option(Timing)),
     outcome_b: #(Outcome, Option(Timing)),
   )
-  ParseFailed(day: Int)
+  ParseFailed(day: Int, message: String)
   NoFile(day: Int, file: String)
 }
 
@@ -610,7 +624,12 @@ fn run_day(
     exception.rescue(fn() { timer.timed(time_mode, fn() { parse(input) }) })
 
   case parsed {
-    Error(_) -> ParseFailed(day:)
+    Error(Errored(error)) | Error(Exited(error)) | Error(Thrown(error)) ->
+      case error_message(error) {
+        Error(_) -> ParseFailed(day:, message: "")
+        Ok(message) -> ParseFailed(day:, message:)
+      }
+
     Ok(#(parsed, parse_timing)) -> {
       let #(result_a, timing_a) =
         timer.timed(time_mode, fn() {
@@ -717,3 +736,6 @@ fn spawn_monitor(function: fn() -> a) -> #(Pid, Monitor)
 
 @external(erlang, "advent_ffi", "decode_error")
 fn error_to_outcome(dynamic: dynamic.Dynamic) -> Outcome
+
+@external(erlang, "advent_ffi", "error_message")
+fn error_message(dynamic: dynamic.Dynamic) -> Result(String, Nil)
