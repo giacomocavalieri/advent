@@ -180,6 +180,7 @@ pub fn run(year: Year) -> Nil {
   let missing_days = dict.keys(year.days) |> set.from_list
   let tree = tree.generate(10)
 
+  io.println("\u{1b}[2J\u{1b}[0;0H")
   report_loop(year.year, tree, me, missing_days, dict.new())
 }
 
@@ -227,7 +228,7 @@ fn print_reports(
     |> list.append(dict.keys(completed_days))
     |> list.fold(1, int.max)
 
-  io.println("\u{1b}[2J\u{1b}[0;0H")
+  io.println("\u{1b}[0;0H")
   let left =
     ansi.yellow("⋆")
     <> ansi.yellow("꙳")

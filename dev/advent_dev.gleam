@@ -8,7 +8,7 @@ pub fn main() {
   |> advent.add_day(
     advent.Day(
       day: 1,
-      parse: fn(_) { panic },
+      parse: fn(_) { 1 },
       part_a: fn(_) { process.sleep(12) },
       expected_a: option.None,
       wrong_answers_a: [],
