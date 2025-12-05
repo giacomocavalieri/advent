@@ -8,6 +8,9 @@ import filepath
 import gleam/dict.{type Dict}
 import gleam/dynamic
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, Abnormal}
+import gleam/http
+import gleam/http/request
+import gleam/httpc
 import gleam/int
 import gleam/io
 import gleam/list
@@ -70,12 +73,18 @@ pub opaque type Year {
     time_mode: TimeMode,
     run_mode: RunMode,
     pad_up_to_days: Int,
+    input_mode: InputMode,
   )
 }
 
 type RunMode {
   Sequential
   Parallel
+}
+
+type InputMode {
+  TryDownloading(session_cookie: String)
+  NeverDownload
 }
 
 /// Creates a new year to collect the solutions for each day.
@@ -91,6 +100,7 @@ pub fn year(year: Int) -> Year {
     time_mode: NoTimings,
     run_mode: Parallel,
     pad_up_to_days: 1,
+    input_mode: NeverDownload,
   )
 }
 
@@ -111,15 +121,22 @@ pub fn sequential(year: Year) -> Year {
   Year(..year, run_mode: Sequential)
 }
 
+/// For all the days added after this option is applied, the runner will try
+/// downloading their input if it cannot be found at the expected path.
+///
+pub fn download_missing_days(year: Year, session_cookie: String) -> Year {
+  Year(..year, input_mode: TryDownloading(session_cookie:))
+}
+
 /// Adds a new day to the given year.
 /// This day will be run independently from all the other ones.
 ///
 pub fn add_day(year: Year, day: Day(_, _, _)) -> Year {
-  let Year(year: year_number, days:, time_mode:, ..) = year
+  let Year(year: year_number, days:, time_mode:, input_mode:, ..) = year
   let days =
     dict.insert(days, day.day, fn() {
-      case get_input(year_number, day.day) {
-        Error(file) -> NoFile(day: day.day, file:)
+      case get_input(input_mode, year_number, day.day) {
+        Error(report) -> report
         Ok(input) -> run_day(input, time_mode, day)
       }
     })
@@ -325,8 +342,9 @@ fn calendar_view(
 fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
   case dict.get(completed_days, day) {
     Error(_) -> ansi.dim("  ")
-    Ok(ParseFailed(day: _, message: _)) -> ansi.red("xx")
-    Ok(NoFile(day: _, file: _)) -> ansi.red("  ")
+    Ok(ParseFailed(day: _, message: _)) -> ansi.red("P ")
+    Ok(NoFile(..)) | Ok(FailedToDownload(..)) | Ok(FileError(..)) ->
+      ansi.red("F ")
     Ok(Ran(day: _, outcome_a:, outcome_b:)) ->
       outcome_to_dot(outcome_a.0) <> outcome_to_dot(outcome_b.0)
   }
@@ -379,7 +397,7 @@ fn max_digits(in reports: List(Report)) -> Option(#(Int, Int)) {
   let #(digits_units, digits_decimals) =
     list.flat_map(reports, fn(report) {
       case report {
-        NoFile(..) | ParseFailed(..) -> []
+        FailedToDownload(..) | FileError(..) | NoFile(..) | ParseFailed(..) -> []
         Ran(outcome_a: #(_, time_a), outcome_b: #(_, time_b), day: _) ->
           case time_a, time_b {
             Some(time_a), Some(time_b) -> [time_a, time_b]
@@ -415,7 +433,9 @@ fn pretty_report_columns(
 ) -> Result(List(String), Nil) {
   let pretty_day = pretty_day(report.day)
   case report {
-    NoFile(..) -> Error(Nil)
+    FileError(..) -> Ok([pretty_day, ansi.red("unexpected file error"), ""])
+    FailedToDownload(..) -> Ok([pretty_day, ansi.red("failed to download"), ""])
+    NoFile(..) -> Ok([pretty_day, ansi.red("missing input file"), ""])
     ParseFailed(message:, ..)
       if message == panic_default_message
       || message == assert_default_message
@@ -561,6 +581,8 @@ type Report {
   )
   ParseFailed(day: Int, message: String)
   NoFile(day: Int, file: String)
+  FailedToDownload(day: Int, file: String)
+  FileError(day: Int, file: String)
 }
 
 type Outcome {
@@ -649,19 +671,67 @@ fn run_day(
   }
 }
 
-fn get_input(year year: Int, day day: Int) -> Result(String, String) {
+fn get_input(
+  mode: InputMode,
+  year year: Int,
+  day day: Int,
+) -> Result(String, Report) {
   let project_root = project.find_root()
-  let year = int.to_string(year) |> string.pad_start(4, "0")
-  let day = int.to_string(day) |> string.pad_start(2, "0")
+  let year_string = int.to_string(year) |> string.pad_start(4, "0")
+  let day_string = int.to_string(day) |> string.pad_start(2, "0")
 
   let file =
     project_root
     |> filepath.join("inputs")
-    |> filepath.join(year)
-    |> filepath.join(day <> ".txt")
+    |> filepath.join(year_string)
+    |> filepath.join(day_string <> ".txt")
 
-  simplifile.read(file)
-  |> result.replace_error(file)
+  case simplifile.read(file) {
+    Ok(input) -> Ok(input)
+    Error(simplifile.Enoent) ->
+      case mode {
+        NeverDownload -> Error(NoFile(day:, file:))
+        TryDownloading(session_cookie:) ->
+          download_and_save(day:, year:, using: session_cookie, to: file)
+      }
+    Error(_) -> Error(FileError(day:, file:))
+  }
+}
+
+const user_agent = "github.com/giacomocavalieri/advent"
+
+fn download_and_save(
+  day day: Int,
+  year year: Int,
+  using session_cookie: String,
+  to file: String,
+) -> Result(String, Report) {
+  case simplifile.create_directory_all(filepath.directory_name(file)) {
+    Error(_) -> Error(FileError(day:, file:))
+    Ok(_) -> {
+      let year_string = int.to_string(year)
+      let day_string = int.to_string(day)
+
+      let path = "/" <> year_string <> "/day/" <> day_string <> "/input"
+      let response =
+        request.new()
+        |> request.set_host("adventofcode.com")
+        |> request.set_path(path)
+        |> request.set_scheme(http.Https)
+        |> request.set_cookie("session", session_cookie)
+        |> request.set_header("user-agent", user_agent)
+        |> httpc.send
+      case response {
+        Error(_) -> Error(FailedToDownload(day:, file:))
+        Ok(response) if response.status == 200 ->
+          case simplifile.write(response.body, to: file) {
+            Error(_) -> Error(FileError(day:, file:))
+            Ok(_) -> Ok(response.body)
+          }
+        Ok(_) -> Error(FailedToDownload(day:, file:))
+      }
+    }
+  }
 }
 
 fn run_part(

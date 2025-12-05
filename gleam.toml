@@ -18,6 +18,8 @@ exception = ">= 2.1.0 and < 3.0.0"
 gleam_time = ">= 1.6.0 and < 2.0.0"
 string_width = ">= 3.3.1 and < 4.0.0"
 tobble = ">= 2.0.2 and < 3.0.0"
+gleam_http = ">= 4.3.0 and < 5.0.0"
+gleam_httpc = ">= 5.0.0 and < 6.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
