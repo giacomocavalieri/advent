@@ -64,11 +64,12 @@ pub type Day(input, output_a, output_b) {
 ///   function.
 ///
 pub opaque type Year {
-  Runner(
+  Year(
     year: Int,
     days: Dict(Int, fn() -> Report),
     time_mode: TimeMode,
     run_mode: RunMode,
+    pad_up_to_days: Int,
   )
 }
 
@@ -84,7 +85,13 @@ type RunMode {
 ///   [`run`](#run) function.
 ///
 pub fn year(year: Int) -> Year {
-  Runner(year:, days: dict.new(), time_mode: NoTimings, run_mode: Parallel)
+  Year(
+    year:,
+    days: dict.new(),
+    time_mode: NoTimings,
+    run_mode: Parallel,
+    pad_up_to_days: 1,
+  )
 }
 
 /// All the days added after this is applied to the runner will also include
@@ -94,31 +101,30 @@ pub fn year(year: Int) -> Year {
 /// time it takes to run the parsing function as well.
 ///
 pub fn timed(year: Year) -> Year {
-  Runner(..year, time_mode: DoTimings)
+  Year(..year, time_mode: DoTimings)
 }
 
 /// Runs all the days one after another in sequence, rather than the default
 /// behaviour of running everything in parallel.
 ///
 pub fn sequential(year: Year) -> Year {
-  Runner(..year, run_mode: Sequential)
+  Year(..year, run_mode: Sequential)
 }
 
 /// Adds a new day to the given year.
 /// This day will be run independently from all the other ones.
 ///
-pub fn add_day(runner: Year, day: Day(_, _, _)) -> Year {
-  let year = runner.year
-  let time_mode = runner.time_mode
+pub fn add_day(year: Year, day: Day(_, _, _)) -> Year {
+  let Year(year: year_number, days:, time_mode:, ..) = year
   let days =
-    dict.insert(runner.days, day.day, fn() {
-      case get_input(year, day.day) {
+    dict.insert(days, day.day, fn() {
+      case get_input(year_number, day.day) {
         Error(file) -> NoFile(day: day.day, file:)
         Ok(input) -> run_day(input, time_mode, day)
       }
     })
 
-  Runner(..runner, days:)
+  Year(..year, days:)
 }
 
 /// This adds a number of padding days until there's the given number of days.
@@ -135,28 +141,8 @@ pub fn add_day(runner: Year, day: Day(_, _, _)) -> Year {
 /// So despite having only two solutions, the full 25 day calendar will be
 /// displayed when ran.
 ///
-pub fn add_padding_days(runner: Year, up_to days: Int) -> Year {
-  let total_days = dict.size(runner.days)
-  let max_day = dict.keys(runner.days) |> list.fold(0, int.max)
-  let missing_days = days - total_days
-  case missing_days <= 0 {
-    True -> runner
-    False ->
-      list.range(max_day + 1, max_day + missing_days)
-      |> list.map(
-        Day(
-          day: _,
-          parse: fn(_) { Nil },
-          part_a: fn(_) { panic as "todo" },
-          part_b: fn(_) { panic as "todo" },
-          expected_a: None,
-          wrong_answers_a: [],
-          expected_b: None,
-          wrong_answers_b: [],
-        ),
-      )
-      |> list.fold(runner, add_day)
-  }
+pub fn add_padding_days(year: Year, up_to days: Int) -> Year {
+  Year(..year, pad_up_to_days: days)
 }
 
 /// Run all the days in the given year.
@@ -177,11 +163,11 @@ pub fn run(year: Year) -> Nil {
 
   process.spawn(fn() { days_runner(me, year) })
 
-  let missing_days = dict.keys(year.days) |> set.from_list
+  let missing_days = set.from_list(dict.keys(year.days))
   let tree = tree.generate(10)
 
   io.println("\u{1b}[2J\u{1b}[0;0H")
-  report_loop(year.year, tree, me, missing_days, dict.new())
+  report_loop(year, tree, me, missing_days, dict.new())
 }
 
 fn days_runner(reporter: Subject(Report), year: Year) -> Nil {
@@ -197,7 +183,7 @@ fn days_runner(reporter: Subject(Report), year: Year) -> Nil {
 }
 
 fn report_loop(
-  year: Int,
+  year: Year,
   tree: String,
   me: Subject(Report),
   missing_days: Set(Int),
@@ -217,7 +203,7 @@ fn report_loop(
 }
 
 fn print_reports(
-  year: Int,
+  year: Year,
   tree: String,
   missing_days: Set(Int),
   completed_days: Dict(Int, Report),
@@ -262,8 +248,8 @@ fn print_reports(
 
   let ribbon_and_calendar =
     [
-      left <> " " <> ansi.red(int.to_string(year)) <> " " <> right <> "\n",
-      calendar_view(today(), max_day, completed_days),
+      left <> " " <> ansi.red(int.to_string(year.year)) <> " " <> right <> "\n",
+      calendar_view(year, today(), max_day, completed_days),
     ]
     |> string_width.stack_vertical(align: Center, gap: 1, with: " ")
 
@@ -309,8 +295,13 @@ fn today() -> Int {
   today.day
 }
 
-fn calendar_view(today: Int, max_day: Int, completed_days: Dict(Int, Report)) {
-  list.range(1, max_day)
+fn calendar_view(
+  year: Year,
+  today: Int,
+  max_day: Int,
+  completed_days: Dict(Int, Report),
+) -> String {
+  list.range(1, int.max(max_day, year.pad_up_to_days))
   |> list.sized_chunk(into: 7)
   |> list.map(fn(row) {
     let days =
@@ -344,7 +335,7 @@ fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
 fn outcome_to_dot(outcome: Outcome) -> String {
   case outcome {
     TimedOut -> ansi.red("~")
-    Crashed("todo") | Todo(_) -> ansi.dim("~")
+    Todo(_) -> ansi.dim("~")
     Crashed(_) -> ansi.red("x")
     Bare(_) -> ansi.yellow("⋆")
     Success(_) -> ansi.green("⋆")
@@ -473,7 +464,6 @@ fn outcome_to_detail(
       || message == let_assert_default_message
       || message == ""
     -> Ok(ansi.red("panic"))
-    Crashed("todo"), _ -> Error(Nil)
     Crashed(message:), _ -> Ok(ansi.red("panic: " <> message))
 
     Bare(value:), None -> Ok(ansi.yellow(value))
