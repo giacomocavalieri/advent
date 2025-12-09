@@ -5,6 +5,7 @@ import advent/internal/timer.{
 import advent/internal/tree
 import exception.{Errored, Exited, Thrown}
 import filepath
+import gleam/bool
 import gleam/dict.{type Dict}
 import gleam/dynamic
 import gleam/erlang/process.{type Monitor, type Pid, type Subject, Abnormal}
@@ -15,10 +16,11 @@ import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/result
 import gleam/set.{type Set}
 import gleam/string
-import gleam/time/calendar
+import gleam/time/calendar.{type Date, December}
 import gleam/time/timestamp
 import gleam_community/ansi
 import logging
@@ -133,9 +135,10 @@ pub fn download_missing_days(year: Year, session_cookie: String) -> Year {
 ///
 pub fn add_day(year: Year, day: Day(_, _, _)) -> Year {
   let Year(year: year_number, days:, time_mode:, input_mode:, ..) = year
+
   let days =
     dict.insert(days, day.day, fn() {
-      case get_input(input_mode, year_number, day.day) {
+      case get_input(input_mode, year_number, day.day, today()) {
         Error(report) -> report
         Ok(input) -> run_day(input, time_mode, day)
       }
@@ -304,17 +307,17 @@ fn term_size() -> #(Int, Int) {
   }
 }
 
-fn today() -> Int {
+fn today() -> Date {
   let #(today, _) =
     timestamp.system_time()
     |> timestamp.to_calendar(calendar.local_offset())
 
-  today.day
+  today
 }
 
 fn calendar_view(
   year: Year,
-  today: Int,
+  today: Date,
   max_day: Int,
   completed_days: Dict(Int, Report),
 ) -> String {
@@ -323,7 +326,7 @@ fn calendar_view(
   |> list.map(fn(row) {
     let days =
       list.map(row, fn(day) {
-        case day == today {
+        case day == today.day {
           True -> pretty_day(day)
           False -> ansi.dim(pretty_day(day))
         }
@@ -341,7 +344,7 @@ fn calendar_view(
 
 fn day_to_dots(day: Int, completed_days: Dict(Int, Report)) -> String {
   case dict.get(completed_days, day) {
-    Error(_) -> ansi.dim("  ")
+    Error(_) | Ok(CannotDownloadFromTheFuture(..)) -> "  "
     Ok(ParseFailed(day: _, message: _)) -> ansi.red("P ")
     Ok(NoFile(..)) | Ok(FailedToDownload(..)) | Ok(FileError(..)) ->
       ansi.red("F ")
@@ -397,7 +400,11 @@ fn max_digits(in reports: List(Report)) -> Option(#(Int, Int)) {
   let #(digits_units, digits_decimals) =
     list.flat_map(reports, fn(report) {
       case report {
-        FailedToDownload(..) | FileError(..) | NoFile(..) | ParseFailed(..) -> []
+        FailedToDownload(..)
+        | CannotDownloadFromTheFuture(..)
+        | FileError(..)
+        | NoFile(..)
+        | ParseFailed(..) -> []
         Ran(outcome_a: #(_, time_a), outcome_b: #(_, time_b), day: _) ->
           case time_a, time_b {
             Some(time_a), Some(time_b) -> [time_a, time_b]
@@ -433,6 +440,7 @@ fn pretty_report_columns(
 ) -> Result(List(String), Nil) {
   let pretty_day = pretty_day(report.day)
   case report {
+    CannotDownloadFromTheFuture(..) -> Error(Nil)
     FileError(..) -> Ok([pretty_day, ansi.red("unexpected file error"), ""])
     FailedToDownload(..) -> Ok([pretty_day, ansi.red("failed to download"), ""])
     NoFile(..) -> Ok([pretty_day, ansi.red("missing input file"), ""])
@@ -582,6 +590,7 @@ type Report {
   ParseFailed(day: Int, message: String)
   NoFile(day: Int, file: String)
   FailedToDownload(day: Int, file: String)
+  CannotDownloadFromTheFuture(day: Int)
   FileError(day: Int, file: String)
 }
 
@@ -675,6 +684,7 @@ fn get_input(
   mode: InputMode,
   year year: Int,
   day day: Int,
+  today today: Date,
 ) -> Result(String, Report) {
   let project_root = project.find_root()
   let year_string = int.to_string(year) |> string.pad_start(4, "0")
@@ -692,7 +702,13 @@ fn get_input(
       case mode {
         NeverDownload -> Error(NoFile(day:, file:))
         TryDownloading(session_cookie:) ->
-          download_and_save(day:, year:, using: session_cookie, to: file)
+          download_and_save(
+            day:,
+            year:,
+            today:,
+            using: session_cookie,
+            to: file,
+          )
       }
     Error(_) -> Error(FileError(day:, file:))
   }
@@ -703,9 +719,16 @@ const user_agent = "github.com/giacomocavalieri/advent"
 fn download_and_save(
   day day: Int,
   year year: Int,
+  today today: Date,
   using session_cookie: String,
   to file: String,
 ) -> Result(String, Report) {
+  let wanted_day = calendar.Date(year:, month: December, day:)
+  use <- bool.guard(
+    when: calendar.naive_date_compare(wanted_day, today) == order.Gt,
+    return: Error(CannotDownloadFromTheFuture(day)),
+  )
+
   case simplifile.create_directory_all(filepath.directory_name(file)) {
     Error(_) -> Error(FileError(day:, file:))
     Ok(_) -> {

@@ -19,7 +19,7 @@ pub fn main() {
   )
   |> advent.add_day(
     advent.Day(
-      day: 2,
+      day: 9,
       parse: fn(_) { Nil },
       part_a: fn(_) { process.sleep(2) },
       expected_a: option.None,
