@@ -506,8 +506,15 @@ fn outcome_to_detail(
     Success(value: _), Some(timing) ->
       Ok(ansi.dim(pretty_elapsed_time(timing, max_digits)))
 
-    Failure(got: _, expected: _), _ -> Error(Nil)
-    KnownFailure(got: _), _ -> Error(Nil)
+    Failure(got:, expected: _), None -> Ok(ansi.red(got))
+    Failure(got:, expected: _), Some(timing) ->
+      Ok(
+        ansi.red(got)
+        <> " "
+        <> ansi.dim(pretty_elapsed_time(timing, max_digits)),
+      )
+
+    KnownFailure(got: _), _ -> Ok(ansi.red("known wrong value"))
   }
 }
 

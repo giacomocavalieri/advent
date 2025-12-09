@@ -12,7 +12,7 @@ pub fn main() {
       part_a: fn(_) { process.sleep(12) },
       expected_a: option.None,
       wrong_answers_a: [],
-      part_b: fn(_) { 1 },
+      part_b: fn(_) { 3 },
       expected_b: option.Some(1),
       wrong_answers_b: [],
     ),
