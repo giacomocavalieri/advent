@@ -76,6 +76,7 @@ pub opaque type Year {
     run_mode: RunMode,
     pad_up_to_days: Int,
     input_mode: InputMode,
+    timeout_seconds: Int,
   )
 }
 
@@ -103,6 +104,7 @@ pub fn year(year: Int) -> Year {
     run_mode: Parallel,
     pad_up_to_days: 1,
     input_mode: NeverDownload,
+    timeout_seconds: 5,
   )
 }
 
@@ -114,6 +116,16 @@ pub fn year(year: Int) -> Year {
 ///
 pub fn timed(year: Year) -> Year {
   Year(..year, time_mode: DoTimings)
+}
+
+/// All the days added after this is applied to the runner will be timed out
+/// after the given seconds.
+///
+/// By default a timeout happens after 5 seconds. This can be handy if a year
+/// has days that require more to complete.
+///
+pub fn with_timeout(year: Year, seconds timeout_seconds: Int) -> Year {
+  Year(..year, timeout_seconds:)
 }
 
 /// Runs all the days one after another in sequence, rather than the default
@@ -134,13 +146,21 @@ pub fn download_missing_days(year: Year, session_cookie: String) -> Year {
 /// This day will be run independently from all the other ones.
 ///
 pub fn add_day(year: Year, day: Day(_, _, _)) -> Year {
-  let Year(year: year_number, days:, time_mode:, input_mode:, ..) = year
+  let Year(
+    year: year_number,
+    days:,
+    time_mode:,
+    input_mode:,
+    run_mode: _,
+    pad_up_to_days: _,
+    timeout_seconds:,
+  ) = year
 
   let days =
     dict.insert(days, day.day, fn() {
       case get_input(input_mode, year_number, day.day, today()) {
         Error(report) -> report
-        Ok(input) -> run_day(input, time_mode, day)
+        Ok(input) -> run_day(input, time_mode, timeout_seconds, day)
       }
     })
 
@@ -636,6 +656,7 @@ type Outcome {
 fn run_day(
   input: String,
   time_mode: TimeMode,
+  timeout_seconds: Int,
   data: Day(input, output_a, output_b),
 ) -> Report {
   let Day(
@@ -662,12 +683,12 @@ fn run_day(
     Ok(#(parsed, parse_timing)) -> {
       let #(result_a, timing_a) =
         timer.timed(time_mode, fn() {
-          run_part(part_a, parsed, expected_a, wrong_answers_a)
+          run_part(timeout_seconds, part_a, parsed, expected_a, wrong_answers_a)
         })
 
       let #(result_b, timing_b) =
         timer.timed(time_mode, fn() {
-          run_part(part_b, parsed, expected_b, wrong_answers_b)
+          run_part(timeout_seconds, part_b, parsed, expected_b, wrong_answers_b)
         })
 
       Ran(
@@ -765,12 +786,13 @@ fn download_and_save(
 }
 
 fn run_part(
+  timeout_seconds: Int,
   part: fn(input) -> output,
   parsed: input,
   expected: Option(output),
   wrong_answers: List(output),
 ) -> Outcome {
-  use <- with_timeout(5000)
+  use <- run_with_timeout(timeout_seconds * 1000)
 
   let output = part(parsed)
   let string_output = string.inspect(output)
@@ -788,7 +810,7 @@ fn run_part(
 
 // TIMEOUT HELPERS -------------------------------------------------------------
 
-fn with_timeout(timeout: Int, run: fn() -> Outcome) -> Outcome {
+fn run_with_timeout(timeout: Int, run: fn() -> Outcome) -> Outcome {
   let me = process.new_subject()
 
   let #(_pid, monitor) =
