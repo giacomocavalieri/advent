@@ -341,7 +341,8 @@ fn calendar_view(
   max_day: Int,
   completed_days: Dict(Int, Report),
 ) -> String {
-  list.range(1, int.max(max_day, year.pad_up_to_days))
+  int.max(max_day, year.pad_up_to_days)
+  |> int.range(to: 0, with: [], run: list.prepend)
   |> list.sized_chunk(into: 7)
   |> list.map(fn(row) {
     let days =
@@ -389,8 +390,12 @@ fn details_table_view(
   completed_days: Dict(Int, Report),
 ) -> Result(String, Nil) {
   let completed_days =
-    list.range(1, max_day)
-    |> list.filter_map(dict.get(completed_days, _))
+    int.range(from: max_day, to: 0, with: [], run: fn(acc, day) {
+      case dict.get(completed_days, day) {
+        Ok(day) -> [day, ..acc]
+        Error(_) -> acc
+      }
+    })
 
   let max_digits = max_digits(in: completed_days)
   let rows =

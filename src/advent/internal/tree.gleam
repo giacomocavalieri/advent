@@ -6,12 +6,11 @@ import string_width
 pub fn generate(height: Int) -> String {
   [
     ansi.magenta("-ˏˋ★ˊˎ-"),
-    ..list.range(1, height)
-    |> list.map(generate_level)
+    ..int.range(from: height, to: 0, with: [], run: fn(acc, level) {
+      [generate_level(level), ..acc]
+    })
   ]
-  |> list.append([
-    ansi.dim("└─┘"),
-  ])
+  |> list.append([ansi.dim("└─┘")])
   |> string_width.stack_vertical(align: string_width.Center, gap: 0, with: " ")
 }
 
